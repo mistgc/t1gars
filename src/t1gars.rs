@@ -22,6 +22,7 @@ pub enum Error {
     InvalidImageDimensions,
     ColorMapIndexFailed,
     IllegalHeader,
+    IOError(std::io::Error),
 }
 
 pub enum TgaImageType {
@@ -60,9 +61,91 @@ pub struct ColorMap {
     pixels: Vec<u8>,
 }
 
+impl From<std::io::Error> for Error {
+    fn from(err: std::io::Error) -> Self {
+        Error::IOError(err)
+    }
+}
+
 impl TgaHeadr {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    #[cfg(target_endian = "little")]
+    pub fn from_file(f: &mut File) -> Result<Self, Error> {
+        let mut header = TgaHeadr::new();
+        let mut buf_1bytes: [u8; 1] = [0; 1];
+        let mut buf_2bytes: [u8; 2] = [0; 2];
+        f.read(&mut buf_1bytes)?;
+        header.id_length = buf_1bytes[0];
+        f.read(&mut buf_1bytes)?;
+        header.map_type = buf_1bytes[0];
+        f.read(&mut buf_1bytes)?;
+        header.image_type = buf_1bytes[0];
+
+        f.read(&mut buf_2bytes)?;
+        header.map_first_entry = (buf_2bytes[0] as u16) + (buf_2bytes[1] as u16) << 8;
+        f.read(&mut buf_2bytes)?;
+        header.map_length = (buf_2bytes[0] as u16) + (buf_2bytes[1] as u16) << 8;
+
+        f.read(&mut buf_1bytes)?;
+        header.map_entry_size = buf_1bytes[0];
+
+        f.read(&mut buf_2bytes)?;
+        header.image_x_origin = (buf_2bytes[0] as u16) + (buf_2bytes[1] as u16) << 8;
+        f.read(&mut buf_2bytes)?;
+        header.image_y_origin = (buf_2bytes[0] as u16) + (buf_2bytes[1] as u16) << 8;
+        f.read(&mut buf_2bytes)?;
+        header.image_width = (buf_2bytes[0] as u16) + (buf_2bytes[1] as u16) << 8;
+        f.read(&mut buf_2bytes)?;
+        header.image_height = (buf_2bytes[0] as u16) + (buf_2bytes[1] as u16) << 8;
+
+
+        f.read(&mut buf_1bytes)?;
+        header.pixel_depth = buf_1bytes[0];
+        f.read(&mut buf_1bytes)?;
+        header.image_descripter = buf_1bytes[0];
+
+        Ok(header)
+    }
+
+    #[cfg(target_endian = "big")]
+    pub fn from_file(f: &mut File) -> Result<Self, Error> {
+        let mut header = TgaHeadr::new();
+        let mut buf_1bytes: [u8; 1] = [0; 1];
+        let mut buf_2bytes: [u8; 2] = [0; 2];
+        f.read(&mut buf_1bytes)?;
+        header.id_length = buf_1bytes[0];
+        f.read(&mut buf_1bytes)?;
+        header.map_type = buf_1bytes[0];
+        f.read(&mut buf_1bytes)?;
+        header.image_type = buf_1bytes[0];
+
+        f.read(&mut buf_2bytes)?;
+        header.map_first_entry = (buf_2bytes[1] as u16) + (buf_2bytes[0] as u16) << 8;
+        f.read(&mut buf_2bytes)?;
+        header.map_length = (buf_2bytes[1] as u16) + (buf_2bytes[0] as u16) << 8;
+
+        f.read(&mut buf_1bytes)?;
+        header.map_entry_size = buf_1bytes[0];
+
+        f.read(&mut buf_2bytes)?;
+        header.image_x_origin = (buf_2bytes[1] as u16) + (buf_2bytes[0] as u16) << 8;
+        f.read(&mut buf_2bytes)?;
+        header.image_y_origin = (buf_2bytes[1] as u16) + (buf_2bytes[0] as u16) << 8;
+        f.read(&mut buf_2bytes)?;
+        header.image_width = (buf_2bytes[1] as u16) + (buf_2bytes[0] as u16) << 8;
+        f.read(&mut buf_2bytes)?;
+        header.image_height = (buf_2bytes[1] as u16) + (buf_2bytes[0] as u16) << 8;
+
+
+        f.read(&mut buf_1bytes)?;
+        header.pixel_depth = buf_1bytes[0];
+        f.read(&mut buf_1bytes)?;
+        header.image_descripter = buf_1bytes[0];
+
+        Ok(header)
     }
 
     pub fn is_supported_image_type(&self) -> Result<TgaImageType, Error> {
