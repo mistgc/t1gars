@@ -1,6 +1,7 @@
-use std::{fs::File, io::Read, path::Path};
+use std::io::{ Seek, SeekFrom };
+use std::{ fs::File, io::Read, path::Path };
 use std::mem;
-use std::alloc::{Layout, self};
+use std::alloc::{ Layout, self };
 use std::slice;
 
 const TGA_MAX_IMAGE_DIMENSIONS: u32 = 65535;
@@ -13,6 +14,8 @@ pub enum TgaPixelFormat {
     RGB24,
     ARGB32,
 }
+
+#[derive(Debug)]
 pub enum Error {
     NoError,
     ErrorOutOfMemory,
@@ -316,7 +319,7 @@ impl Default for TgaInfo {
 impl ColorMap {
     #[inline]
     pub fn try_get_color(&self, buf: &mut [u8], mut index: u16) -> Result<(), Error> {
-        let j = 0;
+        let mut j = 0;
         index -= self.first_index;
         if index < 0 && index >= self.entry_count {
             return Err(Error::ColorMapIndexFailed);
@@ -332,20 +335,155 @@ impl ColorMap {
 }
 
 impl Tga {
-    // TODO
-    // pub fn new(path: &str) -> Result<Self, Error> {
-    //     let mut tga_file = File::open(Path::new(path))?;
-    //     let header = TgaHeader::from_file(&mut tga_file)?;
-    //     let info = TgaInfo::from_tga_header(&header)?;
-    //     let image_type = header.is_supported_image_type()?;
-    //
-    //     let is_color_map = match image_type {
-    //         TgaImageType::ColorMapped | TgaImageType::RLEColorMapped => true,
-    //         _ => false,
-    //     };
-    // }
+    pub fn new(path: &str) -> Result<Self, Error> {
+        let mut tga_file = File::open(Path::new(path))?;
+        let header = TgaHeader::from_file(&mut tga_file)?;
+        let info = TgaInfo::from_tga_header(&header)?;
+        let image_type = header.is_supported_image_type()?;
+        let map_size: usize = header.map_length as usize * bits_to_bytes(header.map_entry_size.into());
+        let mut color_map = None;
 
-    pub fn decode_data(&mut self, f: &File) -> Result<&Vec<u8>, Error> {
+        match image_type {
+            TgaImageType::ColorMapped | TgaImageType::RLEColorMapped => {
+                color_map = Some(ColorMap {
+                    first_index: header.map_first_entry,
+                    entry_count: header.map_length,
+                    bytes_per_entry: bits_to_bytes(header.map_entry_size.into()) as u8,
+                    pixels: vec![255; map_size],
+                });
+                if let Err(error) = tga_file.read(color_map.as_mut().unwrap().pixels.as_mut_slice()) {
+                    return Err(error.into());
+                }
+            },
+            TgaImageType::TrueColor | TgaImageType::GrayScale | TgaImageType::RLEGrayScale | TgaImageType::RLETrueColor => {
+                // The image is not color mapped at this time, but contains a color map.
+                // So skips the color map data block directly.
+                tga_file.seek(SeekFrom::Current(map_size as i64))?;
+            },
+            TgaImageType::NoData => return Err(Error::NoData),
+        }
+
+        let mut tga = Self {
+            header,
+            info,
+            data: Vec::<u8>::new(),
+            // If it is color mapped, 'map' is Some(ColorMap), otherwise it's None.
+            map: color_map,
+        };
+
+        // Decode data
+        tga.decode_data(&mut tga_file);
+        // Release color_map's pixels.
+        if let Some(ref mut cm) = tga.map {
+            cm.pixels = Vec::<u8>::new();
+        }
+
+        // TODO
+        // Flip the image if necessary, to keep the origin at upper left corner.
+        if tga.header.image_descripter & 0x10 != 0 {
+            tga.image_flip_h()?;
+        }
+
+        if tga.header.image_descripter & 0x20 != 0 {
+            tga.image_flip_v()?;
+        }
+
+        Ok(tga)
+    }
+
+    pub fn image_flip_h(&mut self) -> Result<(), Error> {
+        if self.data.len() <= 0 {
+            return Err(Error::NoData);
+        }
+
+        let pixel_size = self.header.get_pixel_size().unwrap() as usize;
+        let flip_num = <u16 as Into<usize>>::into(self.info.width) / 2;
+        let image_height: usize = self.info.height.into();
+        let image_width: usize = self.info.width.into();
+
+        for i in 0..flip_num {
+            for j in 0..image_height {
+                // Swap two pixels.
+                // origin at the upper left corner
+                // index: [x, y] = y * width + x
+                // e.g. suppose width = 3, then [1, 2] = 2 * width + 1 = 7.
+                for k in 0..pixel_size {
+                    self.data.as_mut_slice().swap(j * image_width + i + k, j * image_width + (image_width - 1 - i) + k);
+                }
+            }
+        }
+        
+        Ok(())
+    }
+
+    pub fn image_flip_v(&mut self) -> Result<(), Error> {
+        if self.data.len() <= 0 {
+            return Err(Error::NoData);
+        }
+
+        let pixel_size = self.header.get_pixel_size().unwrap() as usize;
+        let flip_num = <u16 as Into<usize>>::into(self.info.height) / 2;
+        let image_height: usize = self.info.height.into();
+        let image_width: usize = self.info.width.into();
+
+        for i in 0..flip_num {
+            for j in 0..image_width {
+                // Swap two pixels.
+                // origin at the upper left corner
+                // index: [x, y] = y * width + x
+                // e.g. suppose width = 3, then [1, 2] = 2 * width + 1 = 7.
+                for k in 0..pixel_size {
+                    self.data.as_mut_slice().swap(i * image_width + j + k, (image_height - 1 - i) * image_width + j + k);
+                }
+            }
+        }
+        
+        Ok(())
+    }
+
+    #[inline]
+    fn get_mut_pixel(&mut self, mut x: i32, mut y: i32) -> &mut [u8] {
+        if x < 0 {
+            x = 0;
+        } else if x >= self.info.width as i32{
+            x = self.info.width as i32 - 1;
+        }
+
+        if y < 0 {
+            y = 0;
+        } else if y >= self.info.width as i32{
+            y = self.info.height as i32 - 1;
+        }
+
+        let pixel_size = self.header.get_pixel_size().unwrap();
+
+        let start = (y as usize) * (self.info.width as usize) + (x as usize);
+        let end = start + pixel_size as usize;
+        &mut self.data[start..end]
+    }
+
+    #[inline]
+    fn get_pixel(&self, mut x: i32, mut y: i32) -> &[u8] {
+        if x < 0 {
+            x = 0;
+        } else if x >= self.info.width as i32{
+            x = self.info.width as i32 - 1;
+        }
+
+        if y < 0 {
+            y = 0;
+        } else if y >= self.info.width as i32{
+            y = self.info.height as i32 - 1;
+        }
+
+        let pixel_size = self.header.get_pixel_size().unwrap();
+
+        let start = (y as usize) * (self.info.width as usize) + (x as usize);
+        let end = start + pixel_size as usize;
+        &self.data[start..end]
+    }
+
+    fn decode_data(&mut self, f: &mut File) -> Result<&Vec<u8>, Error> {
         let mut pixels_count = self.info.height * self.info.width;
         let pixel_size = self.header.get_pixel_size()?;
         let image_type = self.header.is_supported_image_type()?;
@@ -370,14 +508,14 @@ impl Tga {
                         return Err(error.into());
                     }
 
-                    self.map.unwrap().try_get_color(buf, index);
+                    self.map.as_ref().unwrap().try_get_color(buf, index);
 
-                    for meta_pixel in buf {
+                    for meta_pixel in buf.as_ref() {
                         self.data.push(*meta_pixel);
                     }
 
                     pixels_count -= 1;
-                    index += self.map.unwrap().bytes_per_entry as u16;
+                    index += self.map.as_ref().unwrap().bytes_per_entry as u16;
                 }
                 unsafe {
                     alloc::dealloc(ptr, layout);
@@ -391,7 +529,7 @@ impl Tga {
                 let mut buf_size: u16 = 0;
 
                 if image_type == TgaImageType::RLEColorMapped {
-                    buf_size = self.map.unwrap().bytes_per_entry as u16;
+                    buf_size = self.map.as_ref().unwrap().bytes_per_entry as u16;
                 } else {
                     buf_size = pixel_size as u16;
                 }
@@ -422,7 +560,7 @@ impl Tga {
 
                             if image_type == TgaImageType::RLEColorMapped {
                                 let index = buf[0] as u16;
-                                if let Err(error) = self.map.unwrap().try_get_color(buf, index) {
+                                if let Err(error) = self.map.as_ref().unwrap().try_get_color(buf, index) {
                                     unsafe { alloc::dealloc(ptr, layout) }
                                     return Err(error.into());
                                 }
@@ -431,7 +569,7 @@ impl Tga {
                     }
 
                     if is_run_length_packet {
-                        for i in buf {
+                        for i in buf.as_ref() {
                             self.data.push(*i);
                         }
                     } else {
@@ -442,7 +580,7 @@ impl Tga {
 
                         if image_type == TgaImageType::RLEColorMapped {
                             let index = buf[0] as u16;
-                            if let Err(error) = self.map.unwrap().try_get_color(buf, index) {
+                            if let Err(error) = self.map.as_ref().unwrap().try_get_color(buf, index) {
                                 unsafe { alloc::dealloc(ptr, layout) }
                                 return Err(error.into());
                             }
