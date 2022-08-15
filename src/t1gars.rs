@@ -3,6 +3,7 @@ use std::{ fs::File, io::Read, path::Path };
 use std::mem;
 use std::alloc::{ Layout, self };
 use std::slice;
+use std::ptr;
 
 const TGA_MAX_IMAGE_DIMENSIONS: u32 = 65535;
 const HEADER_SIZE: u32 = 18;
@@ -30,6 +31,17 @@ pub enum Error {
     ColorMapIndexFailed,
     IllegalHeader,
     IOError(std::io::Error),
+}
+
+#[derive(Debug)]
+struct LayPtr(Layout, *mut u8);
+
+impl Drop for LayPtr {
+   fn drop(&mut self) {
+       if !self.1.is_null() {
+           unsafe { alloc::dealloc(self.1, self.0) }
+       }
+   } 
 }
 
 #[derive(PartialEq, Eq)]
@@ -75,14 +87,14 @@ pub struct ColorMap {
     pub first_index: u16,
     pub entry_count: u16,
     pub bytes_per_entry: u8,
-    pub pixels: Vec<u8>,
+    pub pixels: LayPtr,
 }
 
 #[derive(Debug)]
 pub struct Tga {
     pub header: TgaHeader,
     pub info: TgaInfo,
-    pub data: Vec<u8>,
+    pub data: LayPtr,
     pub map: Option<ColorMap>,
 }
 
@@ -350,13 +362,20 @@ impl Tga {
 
         match image_type {
             TgaImageType::ColorMapped | TgaImageType::RLEColorMapped => {
+                let layptr = unsafe {
+                    let layout = Layout::from_size_align_unchecked(map_size * mem::size_of::<u8>(), mem::size_of::<u8>());
+                    LayPtr {
+                        0: layout.clone(),
+                        1: alloc::alloc(layout)
+                    }
+                };
                 color_map = Some(ColorMap {
                     first_index: header.map_first_entry,
                     entry_count: header.map_length,
                     bytes_per_entry: bits_to_bytes(header.map_entry_size.into()) as u8,
-                    pixels: vec![255; map_size],
+                    pixels:  layptr,
                 });
-                if let Err(error) = tga_file.read(color_map.as_mut().unwrap().pixels.as_mut_slice()) {
+                if let Err(error) = tga_file.read(unsafe { slice::from_raw_parts_mut(color_map.as_ref().unwrap().pixels.1, color_map.as_ref().unwrap().pixels.0.size()) }) {
                     return Err(error.into());
                 }
             },
@@ -371,7 +390,7 @@ impl Tga {
         let mut tga = Self {
             header,
             info,
-            data: Vec::<u8>::new(),
+            data: LayPtr(Layout::new::<u8>(), ptr::null_mut()),
             // If it is color mapped, 'map' is Some(ColorMap), otherwise it's None.
             map: color_map,
         };
@@ -380,11 +399,9 @@ impl Tga {
         tga.decode_data(&mut tga_file);
         // Release color_map's pixels.
         if let Some(ref mut cm) = tga.map {
-            cm.pixels = Vec::<u8>::new();
+            drop(cm.pixels);
         }
 
-        // TODO
-        // Flip the image if necessary, to keep the origin at upper left corner.
         if tga.header.image_descripter & 0x10 != 0 {
             tga.image_flip_h()?;
         }
@@ -397,7 +414,7 @@ impl Tga {
     }
 
     pub fn image_flip_h(&mut self) -> Result<(), Error> {
-        if self.data.len() <= 0 {
+        if self.data.0.size() <= 0 {
             return Err(Error::NoData);
         }
 
@@ -406,48 +423,60 @@ impl Tga {
         let image_height: usize = self.info.height.into();
         let image_width: usize = self.info.width.into();
 
-        for i in 0..flip_num {
-            for j in 0..image_height {
-                // Swap two pixels.
-                // origin at the upper left corner
-                // index: [x, y] = y * width + x
-                // e.g. suppose width = 3, then [1, 2] = 2 * width + 1 = 7.
-                for k in 0..pixel_size {
-                    self.data.as_mut_slice().swap(j * image_width + i + k, j * image_width + (image_width - 1 - i) + k);
+        unsafe {
+            let layout = Layout::from_size_align_unchecked(pixel_size * mem::size_of::<u8>(), mem::size_of::<u8>());
+            let ptr = alloc::alloc(layout);
+            let buf = slice::from_raw_parts_mut(ptr, layout.size());
+            for i in 0..flip_num {
+                for j in 0..image_height {
+                    // Swap two pixels.
+                    // origin at the upper left corner
+                    let p1 = self.get_pixel(i as i32, j as i32);
+                    let p2 = self.get_pixel((image_width - 1 - i) as i32, j as i32);
+                    ptr::copy_nonoverlapping(p1, ptr, pixel_size * mem::size_of::<u8>());
+                    ptr::copy_nonoverlapping(p2, p1, pixel_size * mem::size_of::<u8>());
+                    ptr::copy_nonoverlapping(ptr, p2, pixel_size * mem::size_of::<u8>());
                 }
             }
+            alloc::dealloc(ptr, layout);
         }
         
         Ok(())
     }
 
     pub fn image_flip_v(&mut self) -> Result<(), Error> {
-        if self.data.len() <= 0 {
+        if self.data.0.size() <= 0 {
             return Err(Error::NoData);
         }
 
         let pixel_size = self.header.get_pixel_size().unwrap() as usize;
-        let flip_num = <u16 as Into<usize>>::into(self.info.height) / 2;
+        let flip_num = <u16 as Into<usize>>::into(self.info.width) / 2;
         let image_height: usize = self.info.height.into();
         let image_width: usize = self.info.width.into();
 
-        for i in 0..flip_num {
-            for j in 0..image_width {
-                // Swap two pixels.
-                // origin at the upper left corner
-                // index: [x, y] = y * width + x
-                // e.g. suppose width = 3, then [1, 2] = 2 * width + 1 = 7.
-                for k in 0..pixel_size {
-                    self.data.as_mut_slice().swap(i * image_width + j + k, (image_height - 1 - i) * image_width + j + k);
+        unsafe {
+            let layout = Layout::from_size_align_unchecked(pixel_size * mem::size_of::<u8>(), mem::size_of::<u8>());
+            let ptr = alloc::alloc(layout);
+            let buf = slice::from_raw_parts_mut(ptr, layout.size());
+            for i in 0..flip_num {
+                for j in 0..image_height {
+                    // Swap two pixels.
+                    // origin at the upper left corner
+                    let p1 = self.get_pixel(j as i32, i as i32);
+                    let p2 = self.get_pixel(j as i32, (image_height - 1 - i) as i32);
+                    ptr::copy_nonoverlapping(p1, ptr, pixel_size * mem::size_of::<u8>());
+                    ptr::copy_nonoverlapping(p2, p1, pixel_size * mem::size_of::<u8>());
+                    ptr::copy_nonoverlapping(ptr, p2, pixel_size * mem::size_of::<u8>());
                 }
             }
+            alloc::dealloc(ptr, layout);
         }
         
         Ok(())
     }
 
     #[inline]
-    fn get_mut_pixel(&mut self, mut x: i32, mut y: i32) -> &mut [u8] {
+    fn get_pixel(&self, mut x: i32, mut y: i32) -> *mut u8 {
         if x < 0 {
             x = 0;
         } else if x >= self.info.width as i32{
@@ -462,30 +491,11 @@ impl Tga {
 
         let pixel_size = self.header.get_pixel_size().unwrap();
 
-        let start = (y as usize) * (self.info.width as usize) + (x as usize);
-        let end = start + pixel_size as usize;
-        &mut self.data[start..end]
-    }
+        let index = (y as usize) * (self.info.width as usize) + (x as usize);
 
-    #[inline]
-    fn get_pixel(&self, mut x: i32, mut y: i32) -> &[u8] {
-        if x < 0 {
-            x = 0;
-        } else if x >= self.info.width as i32{
-            x = self.info.width as i32 - 1;
+        unsafe {
+            self.data.1.add(index)
         }
-
-        if y < 0 {
-            y = 0;
-        } else if y >= self.info.width as i32{
-            y = self.info.height as i32 - 1;
-        }
-
-        let pixel_size = self.header.get_pixel_size().unwrap();
-
-        let start = (y as usize) * (self.info.width as usize) + (x as usize);
-        let end = start + pixel_size as usize;
-        &self.data[start..end]
     }
 
     fn decode_data(&mut self, f: &mut File) -> Result<&Vec<u8>, Error> {
