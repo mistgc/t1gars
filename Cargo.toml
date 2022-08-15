@@ -8,3 +8,7 @@ edition = "2021"
 [dependencies]
 
 [features]
+
+[[example]]
+name = "test"
+path = "example/example.rs"

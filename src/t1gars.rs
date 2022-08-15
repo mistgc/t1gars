@@ -7,6 +7,7 @@ use std::slice;
 const TGA_MAX_IMAGE_DIMENSIONS: u32 = 65535;
 const HEADER_SIZE: u32 = 18;
 
+#[derive(PartialEq, Eq, Debug)]
 pub enum TgaPixelFormat {
     BW8,
     BW16,
@@ -42,6 +43,7 @@ pub enum TgaImageType {
     RLEGrayScale = 11,
 }
 
+#[derive(Debug)]
 pub struct TgaHeader {
     pub id_length: u8,
     pub map_type: u8,
@@ -61,12 +63,14 @@ pub struct TgaHeader {
     pub image_descripter: u8,
 }
 
+#[derive(Debug)]
 pub struct TgaInfo {
     pub width: u16,
     pub height: u16,
     pub pixel_format: TgaPixelFormat,
 }
 
+#[derive(Debug)]
 pub struct ColorMap {
     pub first_index: u16,
     pub entry_count: u16,
@@ -74,6 +78,7 @@ pub struct ColorMap {
     pub pixels: Vec<u8>,
 }
 
+#[derive(Debug)]
 pub struct Tga {
     pub header: TgaHeader,
     pub info: TgaInfo,
@@ -340,7 +345,7 @@ impl Tga {
         let header = TgaHeader::from_file(&mut tga_file)?;
         let info = TgaInfo::from_tga_header(&header)?;
         let image_type = header.is_supported_image_type()?;
-        let map_size: usize = header.map_length as usize * bits_to_bytes(header.map_entry_size.into());
+        let map_size: usize = <u16 as Into<usize>>::into(header.map_length) * bits_to_bytes(header.map_entry_size.into());
         let mut color_map = None;
 
         match image_type {
@@ -484,7 +489,7 @@ impl Tga {
     }
 
     fn decode_data(&mut self, f: &mut File) -> Result<&Vec<u8>, Error> {
-        let mut pixels_count = self.info.height * self.info.width;
+        let mut pixels_count: usize = self.info.height as usize * self.info.width as usize;
         let pixel_size = self.header.get_pixel_size()?;
         let image_type = self.header.is_supported_image_type()?;
 
@@ -578,6 +583,10 @@ impl Tga {
                             return Err(error.into());
                         }
 
+                        for i in buf.as_ref() {
+                            self.data.push(*i);
+                        }
+
                         if image_type == TgaImageType::RLEColorMapped {
                             let index = buf[0] as u16;
                             if let Err(error) = self.map.as_ref().unwrap().try_get_color(buf, index) {
@@ -607,6 +616,9 @@ fn check_dimensions(width: u32, height: u32) -> bool {
 
 // Convert bits to integer bytes. E.g. 8 bits to 1 byte, 9 bits to 2 bytes.
 #[inline]
-fn bits_to_bytes(bits_count: usize) -> usize {
+pub fn bits_to_bytes(bits_count: usize) -> usize {
+    if bits_count == 0 {
+        return 0;
+    }
     (bits_count - 1) / 8 + 1
 }
