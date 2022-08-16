@@ -8,17 +8,27 @@ So that it could be accessed like an array.
 
 
 ```rust
+struct LayPtr(Layout, *mut u8);
+
+impl Drop for LayPtr {
+   fn drop(&mut self) {
+       if !self.1.is_null() {
+           unsafe { alloc::dealloc(self.1, self.0) }
+       }
+   } 
+}
+
 pub struct ColorMap {
     pub first_index: u16,
     pub entry_count: u16,
     pub bytes_per_entry: u8,
-    pub pixels: *mut u8,
+    pub pixels: LayPtr,
 }
 
 pub struct Tga {
     pub header: TgaHeader,
     pub info: TgaInfo,
-    pub data: *mut u8,
+    pub data: LayPtr,
     pub map: Option<ColorMap>,
 }
 ```
