@@ -1,12 +1,12 @@
 use std::io::{ Seek, SeekFrom };
-use std::{ fs::File, io::Read, path::Path };
+use std::{ fs::File, io::Read, io::Write, path::Path };
 use std::mem;
 use std::alloc::{ Layout, self };
 use std::slice;
 use std::ptr;
 
 const TGA_MAX_IMAGE_DIMENSIONS: u32 = 65535;
-const HEADER_SIZE: u32 = 18;
+const HEADER_SIZE: usize = 18;
 
 #[derive(PartialEq, Eq, Debug)]
 pub enum TgaPixelFormat {
@@ -123,21 +123,21 @@ impl TgaHeader {
         header.image_type = buf_1bytes[0];
 
         f.read(&mut buf_2bytes)?;
-        header.map_first_entry = (buf_2bytes[0] as u16) + (buf_2bytes[1] as u16) << 8;
+        header.map_first_entry = (buf_2bytes[0] as u16) + ((buf_2bytes[1] as u16) << 8);
         f.read(&mut buf_2bytes)?;
-        header.map_length = (buf_2bytes[0] as u16) + (buf_2bytes[1] as u16) << 8;
+        header.map_length = (buf_2bytes[0] as u16) + ((buf_2bytes[1] as u16) << 8);
 
         f.read(&mut buf_1bytes)?;
         header.map_entry_size = buf_1bytes[0];
 
         f.read(&mut buf_2bytes)?;
-        header.image_x_origin = (buf_2bytes[0] as u16) + (buf_2bytes[1] as u16) << 8;
+        header.image_x_origin = (buf_2bytes[0] as u16) + ((buf_2bytes[1] as u16) << 8);
         f.read(&mut buf_2bytes)?;
-        header.image_y_origin = (buf_2bytes[0] as u16) + (buf_2bytes[1] as u16) << 8;
+        header.image_y_origin = (buf_2bytes[0] as u16) + ((buf_2bytes[1] as u16) << 8);
         f.read(&mut buf_2bytes)?;
-        header.image_width = (buf_2bytes[0] as u16) + (buf_2bytes[1] as u16) << 8;
+        header.image_width = (buf_2bytes[0] as u16) + ((buf_2bytes[1] as u16) << 8);
         f.read(&mut buf_2bytes)?;
-        header.image_height = (buf_2bytes[0] as u16) + (buf_2bytes[1] as u16) << 8;
+        header.image_height = (buf_2bytes[0] as u16) + ((buf_2bytes[1] as u16) << 8);
 
         f.read(&mut buf_1bytes)?;
         header.pixel_depth = buf_1bytes[0];
@@ -177,21 +177,21 @@ impl TgaHeader {
         header.image_type = buf_1bytes[0];
 
         f.read(&mut buf_2bytes)?;
-        header.map_first_entry = (buf_2bytes[1] as u16) + (buf_2bytes[0] as u16) << 8;
+        header.map_first_entry = ((buf_2bytes[1] as u16) + ((buf_2bytes[0] as u16) << 8));
         f.read(&mut buf_2bytes)?;
-        header.map_length = (buf_2bytes[1] as u16) + (buf_2bytes[0] as u16) << 8;
+        header.map_length = (buf_2bytes[1] as u16) + ((buf_2bytes[0] as u16) << 8);
 
         f.read(&mut buf_1bytes)?;
         header.map_entry_size = buf_1bytes[0];
 
         f.read(&mut buf_2bytes)?;
-        header.image_x_origin = (buf_2bytes[1] as u16) + (buf_2bytes[0] as u16) << 8;
+        header.image_x_origin = (buf_2bytes[1] as u16) + ((buf_2bytes[0] as u16) << 8);
         f.read(&mut buf_2bytes)?;
-        header.image_y_origin = (buf_2bytes[1] as u16) + (buf_2bytes[0] as u16) << 8;
+        header.image_y_origin = (buf_2bytes[1] as u16) + ((buf_2bytes[0] as u16) << 8);
         f.read(&mut buf_2bytes)?;
-        header.image_width = (buf_2bytes[1] as u16) + (buf_2bytes[0] as u16) << 8;
+        header.image_width = (buf_2bytes[1] as u16) + ((buf_2bytes[0] as u16) << 8);
         f.read(&mut buf_2bytes)?;
-        header.image_height = (buf_2bytes[1] as u16) + (buf_2bytes[0] as u16) << 8;
+        header.image_height = (buf_2bytes[1] as u16) + ((buf_2bytes[0] as u16) << 8);
 
 
         f.read(&mut buf_1bytes)?;
@@ -311,10 +311,10 @@ impl TgaInfo {
     pub fn new() -> Self {
         Self::default()
     }
-    
+
     pub fn from_tga_header(header: &TgaHeader) -> Result<Self, Error> {
         let format = header.get_pixel_format()?;
-        
+
         Ok(Self {
             width: header.image_width,
             height: header.image_height,
@@ -338,7 +338,7 @@ impl ColorMap {
     pub fn try_get_color(&self, buf: &mut [u8], mut index: u16) -> Result<(), Error> {
         unsafe {
             index -= self.first_index;
-            if index < 0 && index >= self.entry_count {
+            if index >= self.entry_count {
                 return Err(Error::ColorMapIndexFailed);
             }
             ptr::copy_nonoverlapping(self.pixels.1, buf.as_mut_ptr().add(index as usize * self.bytes_per_entry as usize), self.bytes_per_entry as usize);
@@ -396,7 +396,7 @@ impl Tga {
         };
 
         // Decode data
-        tga.decode_data(&mut tga_file);
+        tga.decode_data(&mut tga_file)?;
         // Release color_map's pixels.
         if let Some(ref mut cm) = tga.map {
             unsafe {
@@ -414,6 +414,35 @@ impl Tga {
         }
 
         Ok(tga)
+    }
+
+    pub fn save(&self, path: &str) -> Result<(), Error> {
+        let pixel_size = self.header.get_pixel_size()?;
+        let mut header: [u8; HEADER_SIZE] = [0; HEADER_SIZE];
+        let mut f = File::create(path)?;
+        header[12] = self.info.width as u8;
+        header[13] = (self.info.width >> 8) as u8;
+        header[14] = self.info.height as u8;
+        header[15] = (self.info.height >> 8) as u8;
+        header[16] = (pixel_size * 8) as u8;
+        match self.info.pixel_format {
+            TgaPixelFormat::BW8 | TgaPixelFormat::BW16 => { header[2] = TgaImageType::GrayScale as u8 },
+            _ => { header[2] = TgaImageType::TrueColor as u8 },
+        }
+
+        match self.info.pixel_format {
+            TgaPixelFormat::ARGB32 => { header[17] = 0x28 },
+            _ => { header[17] = 0x20 },
+        }
+        // Save the tga image header.
+        f.write(&header)?;
+        // Save the main data.
+        unsafe {
+            let buf = slice::from_raw_parts_mut(self.data.1, self.data.0.size());
+            f.write(buf)?;
+        }
+
+        Ok(())
     }
 
     pub fn image_flip_h(&mut self) -> Result<(), Error> {
@@ -492,7 +521,7 @@ impl Tga {
 
         let pixel_size = self.header.get_pixel_size().unwrap();
 
-        let index = (y as usize) * (self.info.width as usize) + (x as usize);
+        let index = ((y as usize) * (self.info.width as usize) + (x as usize)) * pixel_size as usize;
 
         unsafe {
             self.data.1.add(index)
@@ -532,7 +561,7 @@ impl Tga {
                         }
 
                         // Copy data from buf to tga.data.
-                        self.map.as_ref().unwrap().try_get_color(buf, index);
+                        self.map.as_ref().unwrap().try_get_color(buf, index)?;
                         ptr::copy_nonoverlapping(ptr, self.data.1.add(offset), pixel_size as usize);
                         offset += pixel_size as usize;
 
@@ -544,7 +573,7 @@ impl Tga {
             },
 
             // decode image data with run-length encoding
-            TgaImageType::RLETrueColor | TgaImageType::RLEGrayScale | TgaImageType::RLEColorMapped=> {
+            TgaImageType::RLETrueColor | TgaImageType::RLEGrayScale | TgaImageType::RLEColorMapped => {
                 let mut is_run_length_packet = false;
                 let mut packet_count: u8 = 0;
                 let mut buf_size: u16 = 0;
@@ -603,7 +632,6 @@ impl Tga {
                         }
 
                         unsafe {
-                            // FIXME: the ptr, self.data.1, isn't initialized.
                             ptr::copy_nonoverlapping(ptr, self.data.1.add(offset), buf_size as usize);
                             offset += buf_size as usize;
                         }
