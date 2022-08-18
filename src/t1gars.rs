@@ -539,9 +539,6 @@ impl Tga {
             // decode image data
             TgaImageType::TrueColor | TgaImageType::GrayScale => {
                 unsafe {
-                    let data_size = pixel_size as usize * pixels_count;
-                    self.data.0 = Layout::from_size_align_unchecked(data_size * mem::size_of::<u8>(), mem::size_of::<u8>());
-                    self.data.1 = alloc::alloc(self.data.0);
                     // Convert pointer to slice.
                     f.read(slice::from_raw_parts_mut(self.data.1, self.data.0.size()))?;
                 }
