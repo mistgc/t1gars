@@ -1,13 +1,22 @@
 use t1gars::*;
 
-fn test() -> Result<(), Error> {
+fn test_cbw8() -> Result<(), Error> {
     let tga = Tga::new("example/images/CBW8.TGA")?;
     assert_eq!(tga.header.get_pixel_format().unwrap(), TgaPixelFormat::BW8);
-    tga.save("example/images/temp.tga")?;
+    tga.save("example/images/temp_CBBW8.tga")?;
+
+    Ok(())
+}
+
+fn test_ctc24() -> Result<(), Error> {
+    let tga = Tga::new("example/images/CTC24.TGA")?;
+    assert_eq!(tga.header.get_pixel_format().unwrap(), TgaPixelFormat::RGB24);
+    tga.save("example/images/temp_ctc24.tga")?;
 
     Ok(())
 }
 
 fn main() {
-    println!("{:?}",test());
+    println!("{:?}",test_cbw8());
+    println!("{:?}",test_ctc24());
 }

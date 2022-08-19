@@ -643,6 +643,7 @@ impl Tga {
                     }
 
                     pixels_count -= 1;
+                    packet_count -= 1;
                 }
 
                 unsafe { alloc::dealloc(ptr, layout); }
