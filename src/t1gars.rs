@@ -420,10 +420,10 @@ impl Tga {
         let pixel_size = self.header.get_pixel_size()?;
         let mut header: [u8; HEADER_SIZE] = [0; HEADER_SIZE];
         let mut f = File::create(path)?;
-        header[12] = self.info.width as u8;
-        header[13] = (self.info.width >> 8) as u8;
-        header[14] = self.info.height as u8;
-        header[15] = (self.info.height >> 8) as u8;
+        header[12] = self.info.width as u8 & 0xff;
+        header[13] = (self.info.width >> 8) as u8 & 0xff;
+        header[14] = self.info.height as u8 & 0xff;
+        header[15] = (self.info.height >> 8) as u8 & 0xff;
         header[16] = (pixel_size * 8) as u8;
         match self.info.pixel_format {
             TgaPixelFormat::BW8 | TgaPixelFormat::BW16 => { header[2] = TgaImageType::GrayScale as u8 },
@@ -594,7 +594,7 @@ impl Tga {
                             unsafe { alloc::dealloc(ptr, layout); }
                             return Err(error.into());
                         }
-                        if repetition_count_field[0] & 0x80 != 0x00 {
+                        if (repetition_count_field[0] & 0x80) == 0x80 {
                             is_run_length_packet = true;
                         } else {
                             is_run_length_packet = false;
@@ -620,7 +620,6 @@ impl Tga {
                     if is_run_length_packet {
                         unsafe {
                             ptr::copy_nonoverlapping(ptr, self.data.1.add(offset), buf_size as usize);
-                            offset += buf_size as usize;
                         }
                     } else {
                         if let Err(error) = f.read(buf) {
@@ -630,7 +629,6 @@ impl Tga {
 
                         unsafe {
                             ptr::copy_nonoverlapping(ptr, self.data.1.add(offset), buf_size as usize);
-                            offset += buf_size as usize;
                         }
 
                         if image_type == TgaImageType::RLEColorMapped {
@@ -644,6 +642,7 @@ impl Tga {
 
                     pixels_count -= 1;
                     packet_count -= 1;
+                    offset += pixel_size as usize;
                 }
 
                 unsafe { alloc::dealloc(ptr, layout); }
