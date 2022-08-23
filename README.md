@@ -2,6 +2,10 @@ Lightweight library written in Rust for handling the Truevision TGA image format
 
 For more information about the TGA format, please refer to the [specification](http://www.dca.fee.unicamp.br/~martino/disciplinas/ea978/tgaffs.pdf).
 
+## RLE
+[RLE compression algorithm](RLE.md)
+
+## Data Structure
 We can't use the struct 'Vec'. It will spend a lot of time. So we need directly use raw pointer and make it as slice.
 
 So that it could be accessed like an array.
