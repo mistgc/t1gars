@@ -356,6 +356,9 @@ impl Tga {
         let map_size: usize = <u16 as Into<usize>>::into(header.map_length) * bits_to_bytes(header.map_entry_size.into());
         let mut color_map = None;
 
+        // No need to handle the content of the ID field, so skip directly.
+        tga_file.seek(SeekFrom::Current(header.id_length as i64))?;
+
         match image_type {
             TgaImageType::ColorMapped | TgaImageType::RLEColorMapped => {
                 let layptr = unsafe {
