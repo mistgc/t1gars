@@ -15,7 +15,7 @@ Conditions:
 
     Just repeat the data byte $n$ times and write them to the buffer.
 
-2. the highest bit of the identification byte is `0`
+2. the highest bit of the identification byte is `0`:
 
     Let $n$ equal from the lowest bit of the identification byte to the second highest bit of it.
 
