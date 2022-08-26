@@ -23,24 +23,28 @@ Conditions:
 
 ```rust
 pub fn RLE_decode(inbuf: &[u8], outbuf: &mut [u8]) -> Result<(), &str> {
-    let idx: usize = 0;
+    let offset_inbuf = 0;
+    let offset_outbuf = 0;
     let decoded_length: usize = 0;
     while idx < inbuf.len() {
-        let sign = inbuf[idx];
+        let sign = inbuf[offset_inbuf];
         let n = (sign & 0x3f) as usize;
         if (n as usize + decoded_length) > outbuf.len() {
             return Err("Error: the length of outbuf is'n enough.");
         }
         if (sign & 0x80) == 0x80 {
             for i in 0..n {
-                outbuf[idx+i] = inbuf[idx+1];
+                outbuf[offset_outbuf+i] = inbuf[offset_inbuf+1];
             }
+            offset_outbuf += n;
+            offset_inbuf += 2;
         } else {
             for i in 0..n {
-                outbuf[idx+i] = inbuf[idx+1+i];
+                outbuf[offset_outbuf+i] = inbuf[offset_inbuf+1+i];
             }
+            offset_outbuf += n;
+            offset_inbuf += n + 1;
         }
-        idx += n + 1;
     }
     Ok(())
 }
